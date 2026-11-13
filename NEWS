@@ -1,3 +1,12 @@
+.. _release-1.49.0:
+
+1.49.0
+------
+
+* ID3: Add ``salt`` attribute to GEOB frames so that multiple GEOB frames
+  with identical descriptions are all preserved on read and survive
+  read/write round trips, mirroring the existing APIC behavior
+
 .. _release-1.48.1:
 
 1.48.1 - 2026-06-25

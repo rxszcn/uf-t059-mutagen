@@ -7,9 +7,9 @@ from mutagen import MutagenError
 from mutagen.apev2 import APEv2
 from mutagen.id3 import ID3, Frames, ID3UnsupportedVersionError, TIT2, \
     CHAP, CTOC, TT1, TCON, COMM, TORY, PIC, MakeID3v1, TRCK, TYER, TDRC, \
-    TDAT, TIME, LNK, IPLS, TPE1, BinaryFrame, TIT3, POPM, APIC, CRM, \
-    TALB, TPE2, TSOT, TDEN, TIPL, ParseID3v1, Encoding, ID3Tags, RVAD, \
-    ID3NoHeaderError, Frames_2_2
+    TDAT, TIME, LNK, IPLS, TPE1, BinaryFrame, TIT3, POPM, APIC, GEOB, \
+    CRM, TALB, TPE2, TSOT, TDEN, TIPL, ParseID3v1, Encoding, ID3Tags, \
+    RVAD, ID3NoHeaderError, Frames_2_2
 from mutagen.id3._util import BitPaddedInt, error as ID3Error, ID3SaveConfig
 from mutagen.id3._tags import determine_bpi, ID3Header, save_frame
 from mutagen.id3._id3v1 import find_id3v1
@@ -512,6 +512,64 @@ class TID3Tags(TestCase):
         self.assertEqual(len(id3), 10)
         for key, value in id3.items():
             self.assertEqual(key, value.HashKey)
+
+    def test_geob_duplicate_hash(self):
+        id3 = ID3Tags()
+        for i in range(10):
+            geob = GEOB(
+                encoding=0, mime=u"m", filename=u"f",
+                desc=u"", data=bytes([i]))
+            id3._add(geob, False)
+
+        self.assertEqual(len(id3), 10)
+        for key, value in id3.items():
+            self.assertEqual(key, value.HashKey)
+        self.assertEqual(
+            [f.salt for f in id3.getall("GEOB")],
+            [u" " * i for i in range(10)])
+
+    def test_geob_duplicate_save_roundtrip(self):
+        # Files written by DJ software can carry several GEOB frames with
+        # the same description; all of them must survive save/reload.
+        filename = get_temp_empty(".mp3")
+        try:
+            frames = [
+                GEOB(encoding=0, mime=u"application/octet-stream",
+                     filename=u"a.bin", desc=u"serato", data=b"one"),
+                GEOB(encoding=0, mime=u"application/octet-stream",
+                     filename=u"b.bin", desc=u"serato", data=b"two"),
+            ]
+
+            tags = ID3()
+            for frame in frames:
+                while frame.HashKey in tags:
+                    frame.salt += u" "
+                tags.add(frame)
+            self.assertEqual(len(tags.getall("GEOB")), 2)
+            tags.save(filename)
+
+            reloaded = ID3(filename)
+            kept = reloaded.getall("GEOB")
+            self.assertEqual(len(kept), 2)
+            self.assertEqual(
+                sorted(f.data for f in kept), [b"one", b"two"])
+            self.assertEqual(
+                sorted(f.filename for f in kept), [u"a.bin", u"b.bin"])
+            # the internal salt marker must never reach the file bytes
+            self.assertEqual(
+                sorted(f.salt for f in kept), [u"", u" "])
+
+            # saving again must not drop or duplicate anything
+            with open(filename, "rb") as h:
+                before = h.read()
+            reloaded.save(filename)
+            with open(filename, "rb") as h:
+                after = h.read()
+            self.assertEqual(after, before)
+            again = ID3(filename)
+            self.assertEqual(len(again.getall("GEOB")), 2)
+        finally:
+            os.remove(filename)
 
     def test_text_duplicate_frame_different_encoding(self):
         id3 = ID3Tags()

@@ -1384,6 +1384,8 @@ class GEOB(Frame):
     * filename -- suggested filename if extracted
     * desc -- text description of the data
     * data -- raw data, as a byte string
+    * salt -- will be added to the `HashKey`; this allows for
+      multiple `GEOB` frames with the same description
     """
 
     _framespec = [
@@ -1394,9 +1396,15 @@ class GEOB(Frame):
         BinaryDataSpec('data'),
     ]
 
+    salt = u''
+
     @property
     def HashKey(self):
-        return '%s:%s' % (self.FrameID, self.desc)
+        return '%s:%s%s' % (self.FrameID, self.desc, self.salt)
+
+    def _merge_frame(self, other):
+        other.salt += u' '
+        return other
 
     def __eq__(self, other):
         return self.data == other

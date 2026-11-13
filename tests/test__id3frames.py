@@ -9,7 +9,7 @@ from mutagen.id3._util import ID3SaveConfig, is_valid_frame_id, \
     ID3JunkFrameError
 from mutagen.id3 import APIC, CTOC, CHAP, TPE2, Frames, Frames_2_2, CRA, \
     AENC, PIC, LNK, LINK, SIGN, PRIV, GRID, ENCR, COMR, USER, UFID, GEOB, \
-    POPM, EQU2, RVA2, COMM, SYLT, USLT, WXXX, TXXX, WCOM, TextFrame, \
+    GEO, POPM, EQU2, RVA2, COMM, SYLT, USLT, WXXX, TXXX, WCOM, TextFrame, \
     UrlFrame, NumericTextFrame, NumericPartTextFrame, TPE1, TIT2, \
     TimeStampTextFrame, TCON, ID3TimeStamp, Frame, RVRB, RBUF, CTOCFlags, \
     PairedTextFrame, BinaryFrame, ETCO, MLLT, SYTC, PCNT, PCST, POSS, OWNE, \
@@ -853,6 +853,7 @@ class TGEOB(TestCase):
         self.assertEqual(frame.filename, u"")
         self.assertEqual(frame.desc, u"")
         self.assertEqual(frame.data, b"")
+        self.assertEqual(frame.salt, u"")
 
     def test_hash(self):
         frame = GEOB(
@@ -862,6 +863,107 @@ class TGEOB(TestCase):
 
         self.assertEquals(GEOB(data=b"1").HashKey, GEOB(data=b"2").HashKey)
         self.assertNotEquals(GEOB(desc="a").HashKey, GEOB(desc="b").HashKey)
+
+    def test_hash_salt(self):
+        frame = GEOB(encoding=0, desc="d", data=b"\x42")
+        frame.salt = u" "
+        self.assertEqual(frame.HashKey, "GEOB:d ")
+
+    def test_merge_frame(self):
+        old = GEOB(encoding=0, desc="d", data=b"1")
+        new = GEOB(encoding=0, desc="d", data=b"2")
+
+        # the incoming frame is kept but gets a salted, distinct HashKey
+        merged = old._merge_frame(new)
+        self.assertIs(merged, new)
+        self.assertEqual(merged.salt, u" ")
+        self.assertNotEqual(merged.HashKey, old.HashKey)
+        self.assertEqual(old.HashKey, "GEOB:d")
+        self.assertEqual(merged.HashKey, "GEOB:d ")
+
+    def test_duplicate_hash(self):
+        tags = ID3Tags()
+        for i in range(10):
+            frame = GEOB(
+                encoding=0, mime=u"m", filename=u"f",
+                desc=u"", data=bytes([i]))
+            tags._add(frame, False)
+
+        self.assertEqual(len(tags), 10)
+        for key, value in tags.items():
+            self.assertEqual(key, value.HashKey)
+        self.assertEqual(
+            [f.salt for f in tags.getall("GEOB")],
+            [u" " * i for i in range(10)])
+
+    def test_duplicate_hash_roundtrip(self):
+        tags = ID3Tags()
+        frames = [
+            GEOB(encoding=0, mime=u"m1", filename=u"a",
+                 desc=u"dj", data=b"one"),
+            GEOB(encoding=0, mime=u"m2", filename=u"b",
+                 desc=u"dj", data=b"two"),
+            GEOB(encoding=0, mime=u"m3", filename=u"c",
+                 desc=u"dj", data=b"three"),
+        ]
+        raw = b"".join(save_frame(f) for f in frames)
+
+        header = ID3Header()
+        header.version = (2, 4, 0)
+        tags._read(header, raw)
+
+        kept = tags.getall("GEOB")
+        self.assertEqual(len(kept), 3)
+        self.assertEqual([f.data for f in kept],
+                         [b"one", b"two", b"three"])
+        self.assertEqual([f.salt for f in kept], [u"", u" ", u"  "])
+
+        # salt is an in-memory marker only: serialized bytes stay identical
+        config = ID3SaveConfig(v2_version=4)
+        written = bytes(tags._write(config))
+        self.assertEqual(written, raw)
+
+        # repeated read/write cycles stay idempotent
+        for _ in range(3):
+            again = ID3Tags()
+            again._read(header, written)
+            self.assertEqual(len(again.getall("GEOB")), 3)
+            self.assertEqual(
+                [f.data for f in again.getall("GEOB")],
+                [b"one", b"two", b"three"])
+            written = bytes(again._write(config))
+            self.assertEqual(written, raw)
+
+    def test_salt_not_serialized(self):
+        frame = GEOB(
+            encoding=0, mime=u"m", filename=u"f", desc=u"d", data=b"\x42")
+        plain = frame._writeData()
+        frame.salt = u" " * 4
+        self.assertEqual(frame._writeData(), plain)
+        self.assertNotIn("salt", repr(frame))
+
+    def test_v22_geo_duplicate_upgrade(self):
+        def save_v22(frame):
+            body = frame._writeData(ID3SaveConfig(v2_version=3))
+            return b"GEO" + len(body).to_bytes(3, "big") + body
+
+        raw = save_v22(GEO(encoding=0, mime=u"m1", filename=u"f",
+                           desc=u"d", data=b"AA"))
+        raw += save_v22(GEO(encoding=0, mime=u"m2", filename=u"g",
+                            desc=u"d", data=b"BB"))
+
+        parsed, unknown, leftover = read_frames(_22, raw, Frames_2_2)
+        self.assertEqual(unknown, [])
+        self.assertEqual(leftover, b"")
+
+        tags = ID3Tags()
+        for frame in parsed:
+            tags._add(frame, False)
+
+        kept = tags.getall("GEOB")
+        self.assertEqual(len(kept), 2)
+        self.assertEqual([f.data for f in kept], [b"AA", b"BB"])
+        self.assertEqual([f.salt for f in kept], [u"", u" "])
 
 
 class TPOPM(TestCase):
